@@ -23,7 +23,10 @@ if __name__ == "__main__":
         env = gym.wrappers.RecordVideo(env, video_folder=args.record+args.env, episode_trigger=lambda x: True)
         #env = gym.wrappers.Monitor(env, args.record)
     
-    net = model.Q_Net(env.observation_space.shape, env.action_space.n)
+    if 'dueling' in args.model:
+        net = model.Dueling_Net(env.observation_space.shape, env.action_space.n)
+    else:
+        net = model.Q_Net(env.observation_space.shape, env.action_space.n)
     net.load_state_dict(torch.load(args.model, map_location=lambda storage, loc: storage, weights_only=True))
     net.eval()
     state = env.reset()
