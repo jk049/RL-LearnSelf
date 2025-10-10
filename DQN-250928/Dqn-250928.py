@@ -28,6 +28,8 @@ DQN算法
     end for
 【实验结果】：
     1. RB容量影响重大，大容量的训练速度快很多
+    2. PER use less samples to achieve same performance, but each step is slower
+
 """
 
 import numpy as np
@@ -63,8 +65,12 @@ class DqnAgent:
             self.train_net = model.Q_Net(obs_shape, action_space).to(self.device)
             self.target_net = model.Q_Net(obs_shape, action_space).to(self.device)
         if args.resume:
-            self.train_net.load_state_dict(torch.load(args.save_path + self.model_save_name, map_location=self.device))
-            print(f"Resumed model from {args.save_path + self.model_save_name}")
+            if args.resume_path is None:
+                resume_path = args.save_path + self.model_save_name
+            else:
+                resume_path = args.resume_path
+            self.train_net.load_state_dict(torch.load(resume_path, map_location=self.device))
+            print(f"Resumed model from {resume_path}")
         self.optimizer = torch.optim.Adam(self.train_net.parameters(), lr=args.lr)
         self.loss = nn.MSELoss()
         print(self.train_net)
@@ -127,6 +133,7 @@ if __name__ == "__main__":
     parser.add_argument('--max_episodes', type=int, default=1000000, help='maximum number of training episodes, default 1000000')
     parser.add_argument('--save_path', type=str, default='./out/', help='path to save the trained model, default ./out/')
     parser.add_argument('--resume', default=False, action='store_true', help='resume training from saved model')
+    parser.add_argument('--resume_path', type=str, default=None, help='path to load the saved model')
     parser.add_argument('--double', default=False, action='store_true', help='enable double dqn')
     parser.add_argument('--dueling', default=False, action='store_true', help='enable dueling dqn')
     parser.add_argument('--PER', default=False, action='store_true', help='enable prioritized experience replay')
