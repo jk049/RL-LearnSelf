@@ -27,6 +27,7 @@ DQN算法
         end while
     end for
 【实验结果】：
+    1. RB容量影响重大，大容量的训练速度快很多
 """
 
 import numpy as np
@@ -45,12 +46,16 @@ class DqnAgent:
     def __init__(self, obs_shape, action_space, args):
         self.epsilon = args.epsilon_start
         self.device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
-        model_latt_name = ''
+        self.PER = args.PER
+        self.double = args.double
+        model_last_name = ''
         if args.double:
-            model_latt_name += '_double'
+            model_last_name += '_double'
         if args.dueling:
-            model_latt_name += '_dueling'
-        self.model_save_name = f"{args.env}{model_latt_name}.pth"
+            model_last_name += '_dueling'
+        if args.PER:
+            model_last_name += '_PER'
+        self.model_save_name = f"{args.env}{model_last_name}.pth"
         if args.dueling:
             self.train_net = model.Dueling_Net(obs_shape, action_space).to(self.device)
             self.target_net = model.Dueling_Net(obs_shape, action_space).to(self.device)
@@ -73,37 +78,39 @@ class DqnAgent:
         self.epsilon = max(args.epsilon_end, self.epsilon - (args.epsilon_start - args.epsilon_end) / args.epsilon_decay_steps)
         return action
     
+    def get_train_qsa(self, state_batch, action_batch):
+        train_q_values = self.train_net(state_batch) # shape: [B, action_space]
+        train_q_sa = train_q_values.gather(dim=1, index=action_batch.unsqueeze(-1)).squeeze(-1) # shape: [B,]
+        return train_q_sa
+    
+    def get_tgt_qsa(self, next_state_batch, reward_batch, done_batch):
+        with torch.no_grad():
+            if self.double:
+                next_action = self.train_net(next_state_batch).argmax(1) # shape: [B,]
+                target_q_next = self.target_net(next_state_batch).gather(dim=1, index=next_action.unsqueeze(-1)).squeeze(-1) # shape: [B,]
+            else:
+                target_q_next = self.target_net(next_state_batch).max(1)[0] # shape: [B,], max()返回值是(values, indices)
+            target_q_next *= ~done_batch # if done, Q(s')=0, q_tgt_sa = r
+            target_q_sa = reward_batch + args.gamma * target_q_next # shape: [B,]
+        return target_q_sa
+
     def learn(self, batch):
-        state_batch, action_batch, reward_batch, next_state_batch, done_batch = batch
-        train_q_values = self.train_net(state_batch) # shape: [B, action_space]
-        train_q_sa = train_q_values.gather(dim=1, index=action_batch.unsqueeze(-1)).squeeze(-1) # shape: [B,]
-        with torch.no_grad():
-            target_q_next = self.target_net(next_state_batch).max(1)[0] # shape: [B,], max()返回值是(values, indices)
-            target_q_next *= ~done_batch # if done, Q(s')=0, q_tgt_sa = r
-            target_q_sa = reward_batch + args.gamma * target_q_next # shape: [B,]
+        states, actions, rewards, next_states, dones = batch[:5]
+        train_q_sa = self.get_train_qsa(states, actions)
+        target_q_sa = self.get_tgt_qsa(next_states, rewards, dones)
         loss = self.loss(train_q_sa, target_q_sa)
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
 
-    def learn_double(self, batch):
-        state_batch, action_batch, reward_batch, next_state_batch, done_batch = batch
-        train_q_values = self.train_net(state_batch) # shape: [B, action_space]
-        train_q_sa = train_q_values.gather(dim=1, index=action_batch.unsqueeze(-1)).squeeze(-1) # shape: [B,]
-        with torch.no_grad():
-            next_action = self.train_net(next_state_batch).argmax(1) # shape: [B,]
-            target_q_next = self.target_net(next_state_batch).gather(dim=1, index=next_action.unsqueeze(-1)).squeeze(-1) # shape: [B,]
-            target_q_next *= ~done_batch # if done, Q(s')=0, q_tgt_sa = r
-            target_q_sa = reward_batch + args.gamma * target_q_next # shape: [B,]
-        loss = self.loss(train_q_sa, target_q_sa)
-        self.optimizer.zero_grad()
-        loss.backward()
-        self.optimizer.step()
-
+        if self.PER:
+            weights = batch[-1]
+            loss = ((train_q_sa - target_q_sa) ** 2) * weights
+        return loss.detach()
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', type=int, default=47, help='random seed, default 47')
+    parser.add_argument('--seed', type=int, default=42, help='random seed, default 47')
     parser.add_argument('--cuda', default=True, action='store_true', help='enable cuda')
     parser.add_argument('--env', default='PongNoFrameskip-v4', help='gym environment name, default PongNoFrameskip-v4')
     parser.add_argument('--gamma', type=float, default=0.99, help='discount factor for reward, default 0.99')
@@ -122,6 +129,10 @@ if __name__ == "__main__":
     parser.add_argument('--resume', default=False, action='store_true', help='resume training from saved model')
     parser.add_argument('--double', default=False, action='store_true', help='enable double dqn')
     parser.add_argument('--dueling', default=False, action='store_true', help='enable dueling dqn')
+    parser.add_argument('--PER', default=False, action='store_true', help='enable prioritized experience replay')
+    parser.add_argument('--rb_alpha', type=float, default=0.6, help='alpha parameter for prioritized experience replay, default 0.6')
+    parser.add_argument('--rb_beta', type=float, default=0.4, help='beta parameter for prioritized experience replay, default 0.4')
+    parser.add_argument('--rb_eps', type=float, default=1e-6, help='epsilon parameter for prioritized experience replay, default 1e-6')
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -129,7 +140,11 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
     env = env_wrappers.make_env(args.env)
-    rb = replay_buffer.RB(args.rb_capacity, env.observation_space.shape, device)
+    if args.PER:
+        rb = replay_buffer.PrioRB(args.rb_capacity, env.observation_space.shape, device, 
+                                  alpha=args.rb_alpha, beta=args.rb_beta, eps=args.rb_eps)
+    else:
+        rb = replay_buffer.RB(args.rb_capacity, env.observation_space.shape, device)
     agent = DqnAgent(env.observation_space.shape, env.action_space.n, args)
 
     frame_cnt = 0
@@ -157,11 +172,10 @@ if __name__ == "__main__":
                     continue
                 
                 batch = rb.sample(args.batch_size)
-                if args.double:
-                    agent.learn_double(batch)
-                else:
-                    agent.learn(batch)
-            
+                loss = agent.learn(batch)
+                if args.PER:
+                    rb.update_prio(loss, batch[5]) # batch = (s, a, r, s', done, indices, weights)
+
             episode_rewards.append(episode_reward)
             rwd_mean = np.mean(episode_rewards[-100:])
             episode_end_time = time.time()
@@ -175,7 +189,7 @@ if __name__ == "__main__":
             if episode % 100 == 0:
                 progress = round(rwd_mean, 2)
                 pbar.set_description(f'Episode {episode}')
-                pbar.set_postfix({'Mean_Rwd': f'{rwd_mean:.2f}', 'Eps': f'{agent.epsilon:.2f}', 'FPS': f'{fps:.1f}'})
+                pbar.set_postfix({'Best Rwd': f'{best_reward:.2f}', 'Eps': f'{agent.epsilon:.2f}', 'FPS': f'{fps:.1f}'})
                 pbar.update(progress - pbar.n)
 
 
