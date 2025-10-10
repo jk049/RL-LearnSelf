@@ -186,7 +186,7 @@ if __name__ == "__main__":
             if rwd_mean >= args.rwd_bound:
                 print(f"Solved in {episode} episodes!")
                 break
-            if episode % 100 == 0:
+            if episode % 10 == 0:
                 progress = round(rwd_mean, 2)
                 pbar.set_description(f'Episode {episode}')
                 pbar.set_postfix({'Best Rwd': f'{best_reward:.2f}', 'Eps': f'{agent.epsilon:.2f}', 'FPS': f'{fps:.1f}'})
