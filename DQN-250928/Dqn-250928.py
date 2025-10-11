@@ -111,7 +111,7 @@ class DqnAgent:
 
         if self.PER:
             weights = batch[-1]
-            loss = ((train_q_sa - target_q_sa) ** 2) * weights
+            loss = ((train_q_sa - target_q_sa) ** 2) * 0.5 * weights
         return loss.detach()
     
 if __name__ == "__main__":
@@ -172,11 +172,11 @@ if __name__ == "__main__":
                 rb.add(state, action, reward, next_state, done)
                 state = next_state
                 episode_reward += reward
-                if frame_cnt % args.sync_target_frames == 0:
-                    agent.target_net.load_state_dict(agent.train_net.state_dict())
                 frame_cnt += 1
                 if frame_cnt < args.replay_start_size:
                     continue
+                if frame_cnt % args.sync_target_frames == 0:
+                    agent.target_net.load_state_dict(agent.train_net.state_dict())
                 
                 batch = rb.sample(args.batch_size)
                 loss = agent.learn(batch)
@@ -193,11 +193,10 @@ if __name__ == "__main__":
             if rwd_mean >= args.rwd_bound:
                 print(f"Solved in {episode} episodes!")
                 break
-            if episode % 10 == 0:
-                progress = round(rwd_mean, 2)
-                pbar.set_description(f'Episode {episode}')
-                pbar.set_postfix({'Best Rwd': f'{best_reward:.2f}', 'Eps': f'{agent.epsilon:.2f}', 'FPS': f'{fps:.1f}'})
-                pbar.update(progress - pbar.n)
+            progress = round(rwd_mean, 2)
+            pbar.set_description(f'Episode {episode}')
+            pbar.set_postfix({'Best Rwd': f'{best_reward:.2f}', 'Eps': f'{agent.epsilon:.2f}', 'FPS': f'{fps:.1f}'})
+            pbar.update(progress - pbar.n)
 
 
     # plot mean reward
