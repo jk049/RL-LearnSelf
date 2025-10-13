@@ -4,10 +4,64 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import math
 
-class Q_Net(nn.Module):
-    def __init__(self, input_shape, action_num): # input_shape: (B, 4(frame stack), H=84, W=84)
-        super(Q_Net, self).__init__()
+class NoisyLinear(nn.Module):
+    def __init__(self, feats_in, feats_out, std_init=0.5):
+        super().__init__()
+        self.feats_in = feats_in
+        self.feats_out = feats_out
+        self.std_init = std_init
+        self.w_mu = nn.Parameter(torch.FloatTensor(feats_out, feats_in))
+        self.w_sigma = nn.Parameter(torch.FloatTensor(feats_out, feats_in))
+        self.register_buffer('w_eps', torch.FloatTensor(feats_out, feats_in))
+        self.b_mu = nn.Parameter(torch.FloatTensor(feats_out))
+        self.b_sigma = nn.Parameter(torch.FloatTensor(feats_out))
+        self.register_buffer('b_eps', torch.FloatTensor(feats_out))
+        self.para_init()
+
+    def para_init(self):
+        sqrt_fin = 1 / math.sqrt(self.feats_in)
+        self.w_mu.data.uniform_(-sqrt_fin, sqrt_fin) # 按照Xavier，w取值范围与输入特征数呈反比
+        self.w_sigma.data.fill_(self.std_init * sqrt_fin)
+        self.w_eps.normal_() # N(0,1)
+        self.b_mu.data.uniform_(-sqrt_fin, sqrt_fin)
+        self.b_sigma.data.fill_(self.std_init * sqrt_fin)
+        self.b_eps.normal_()
+    
+    def forward(self, x):
+        if self.training:
+            w = self.w_mu + self.w_sigma * self.w_eps
+            b = self.b_mu + self.b_sigma * self.b_eps
+        else:
+            w = self.w_mu
+            b = self.b_mu
+        return nn.functional.linear(x, w, b)
+
+class DqnFc(nn.Module):
+    def __init__(self, feats_in, feats_out, noisy=False):
+        super().__init__()
+        if noisy:
+            self.fc_module = nn.Sequential(
+                nn.Flatten(),
+                NoisyLinear(feats_in, 512),
+                nn.ReLU(),
+                NoisyLinear(512, feats_out)
+            )
+        else:
+            self.fc_module = nn.Sequential(
+                nn.Flatten(),
+                nn.Linear(feats_in, 512),
+                nn.ReLU(),
+                nn.Linear(512, feats_out)
+            )
+    def forward(self, x):
+        return self.fc_module(x)
+
+
+class QNet(nn.Module):
+    def __init__(self, input_shape, action_num, noisy=False): # input_shape: (B, 4(frame stack), H=84, W=84)
+        super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(input_shape[0], 32, kernel_size=8, stride=4), # (84-8)/4 + 1 = 20. -> (B, 32, 20, 20) 
             nn.ReLU(),
@@ -17,12 +71,7 @@ class Q_Net(nn.Module):
             nn.ReLU()
         )
         conv_out_size = self._get_conv_out(input_shape)  # 1*64*7*7 = 3136
-        self.fc = nn.Sequential(
-            nn.Flatten(), # 展平，[B, 64, 7, 7] -> [B, 3136]
-            nn.Linear(conv_out_size, 512),
-            nn.ReLU(),
-            nn.Linear(512, action_num)
-        )
+        self.fc = DqnFc(conv_out_size, action_num, noisy)
 
     def _get_conv_out(self, shape):
         o = self.conv(torch.zeros(1, *shape))
@@ -32,9 +81,9 @@ class Q_Net(nn.Module):
         conv_out = self.conv(x)
         return self.fc(conv_out) 
 
-class Dueling_Net(nn.Module):
-    def __init__(self, input_shape, action_num): # input_shape: (B, 4(frame stack), H=84, W=84)
-        super(Dueling_Net, self).__init__()
+class DuelingNet(nn.Module):
+    def __init__(self, input_shape, action_num, noisy=False): # input_shape: (B, 4(frame stack), H=84, W=84)
+        super().__init__()
         self.conv = nn.Sequential(
             nn.Conv2d(input_shape[0], 32, kernel_size=8, stride=4), # (84-8)/4 + 1 = 20. -> (B, 32, 20, 20) 
             nn.ReLU(),
@@ -44,20 +93,8 @@ class Dueling_Net(nn.Module):
             nn.ReLU()
         )
         conv_out_size = self._get_conv_out(input_shape)  # 1*64*7*7 = 3136
-
-        self.fc_value = nn.Sequential(
-            nn.Flatten(), # 展平，[B, 64, 7, 7] -> [B, 3136]
-            nn.Linear(conv_out_size, 512),
-            nn.ReLU(),
-            nn.Linear(512, 1)
-        )
-
-        self.fc_adv = nn.Sequential(
-            nn.Flatten(), # 展平，[B, 64, 7, 7] -> [B, 3136]
-            nn.Linear(conv_out_size, 512),
-            nn.ReLU(),
-            nn.Linear(512, action_num)
-        )
+        self.fc_state_value = DqnFc(conv_out_size, 1, noisy)
+        self.fc_act_advantage = DqnFc(conv_out_size, action_num, noisy)
 
     def _get_conv_out(self, shape):
         o = self.conv(torch.zeros(1, *shape))
@@ -65,9 +102,9 @@ class Dueling_Net(nn.Module):
 
     def forward(self, x):
         conv_out = self.conv(x)
-        value = self.fc_value(conv_out) # shape: [B, 1]
-        adv = self.fc_adv(conv_out)     # shape: [B, action_num]
-        q = value + adv - adv.mean(dim=1, keepdim=True) # 广播机制，q shape: [B, action_num]
+        state_value = self.fc_state_value(conv_out) # shape: [B, 1]
+        act_advantage = self.fc_act_advantage(conv_out)     # shape: [B, action_num]
+        q = state_value + act_advantage - act_advantage.mean(dim=1, keepdim=True) 
         return q
 
 
