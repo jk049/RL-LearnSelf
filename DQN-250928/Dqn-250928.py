@@ -50,13 +50,15 @@ class DqnAgent:
             model_latt_name += '_double'
         if args.dueling:
             model_latt_name += '_dueling'
+        if args.noisy:
+            model_latt_name += '_noisy'
         self.model_save_name = f"{args.env}{model_latt_name}.pth"
         if args.dueling:
-            self.train_net = model.Dueling_Net(obs_shape, action_space).to(self.device)
-            self.target_net = model.Dueling_Net(obs_shape, action_space).to(self.device)
+            self.train_net = model.DuelingNet(obs_shape, action_space, args.noisy).to(self.device)
+            self.target_net = model.DuelingNet(obs_shape, action_space, args.noisy).to(self.device)
         else:
-            self.train_net = model.Q_Net(obs_shape, action_space).to(self.device)
-            self.target_net = model.Q_Net(obs_shape, action_space).to(self.device)
+            self.train_net = model.QNet(obs_shape, action_space, args.noisy).to(self.device)
+            self.target_net = model.QNet(obs_shape, action_space, args.noisy).to(self.device)
         if args.resume:
             self.train_net.load_state_dict(torch.load(args.save_path + self.model_save_name, map_location=self.device))
             print(f"Resumed model from {args.save_path + self.model_save_name}")
@@ -122,6 +124,7 @@ if __name__ == "__main__":
     parser.add_argument('--resume', default=False, action='store_true', help='resume training from saved model')
     parser.add_argument('--double', default=False, action='store_true', help='enable double dqn')
     parser.add_argument('--dueling', default=False, action='store_true', help='enable dueling dqn')
+    parser.add_argument('--noisy', default=False, action='store_true', help='enable noisy dqn')
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -172,11 +175,10 @@ if __name__ == "__main__":
             if rwd_mean >= args.rwd_bound:
                 print(f"Solved in {episode} episodes!")
                 break
-            if episode % 100 == 0:
-                progress = round(rwd_mean, 2)
-                pbar.set_description(f'Episode {episode}')
-                pbar.set_postfix({'Mean_Rwd': f'{rwd_mean:.2f}', 'Eps': f'{agent.epsilon:.2f}', 'FPS': f'{fps:.1f}'})
-                pbar.update(progress - pbar.n)
+            progress = round(rwd_mean, 2)
+            pbar.set_description(f'Episode {episode}')
+            pbar.set_postfix({'Mean_Rwd': f'{rwd_mean:.2f}', 'Eps': f'{agent.epsilon:.2f}', 'FPS': f'{fps:.1f}'})
+            pbar.update(progress - pbar.n)
 
 
     # plot mean reward
