@@ -63,15 +63,16 @@ class PrioRB(RB):
         self.init_prio = 1.0
         self.prioritys = torch.zeros(capacity, dtype=torch.float32, device=device)
         self.rng = torch.Generator(device=device)
+        self.full= False
 
     def add(self, state, action, reward, next_state, done):
-        super().add(state, action, reward, next_state, done)
         max_prio = max(self.init_prio, self.prioritys.max().item())
-        index = self.capacity - 1 if self.cur_index ==0 else self.cur_index - 1
-        self.prioritys[index] = max_prio
+        self.prioritys[self.cur_index] = max_prio
+        super().add(state, action, reward, next_state, done)
+        self.full= True if self.cur_index == 0 else self.full
 
     def sample(self, batch_size):
-        exp_num = self.cur_index if 0 in self.prioritys else self.capacity
+        exp_num = self.capacity if self.full else self.cur_index
         prob = self.prioritys[:exp_num] / self.prioritys[:exp_num].sum()
         indices = torch.multinomial(prob, batch_size, replacement=True, generator=self.rng)
         weights = (self.capacity * prob[indices]) ** (-self.beta)
