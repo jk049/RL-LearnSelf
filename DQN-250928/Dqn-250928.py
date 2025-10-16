@@ -50,6 +50,7 @@ class DqnAgent:
         self.device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
         self.PER = args.PER
         self.double = args.double
+        self.noisy = args.noisy
         model_last_name = ''
         if args.double:
             model_last_name += '_double'
@@ -78,7 +79,7 @@ class DqnAgent:
         print(self.train_net)
     
     def take_action(self, state):
-        if rng.random() < self.epsilon:
+        if not self.noisy and rng.random() < self.epsilon:
             action = env.action_space.sample()
         else:
             with torch.no_grad():
