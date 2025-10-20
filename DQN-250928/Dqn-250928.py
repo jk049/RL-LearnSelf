@@ -158,7 +158,6 @@ class DqnAgent:
         weights = batch[-1] if self.PER else None
         train_q_sa = self.get_train_qsa(states, actions)
         target_q_sa = self.get_tgt_qsa(next_states, rewards, dones)
-        # loss expects (tgt_qsa, train_qsa)
         loss = self.loss(target_q_sa, train_q_sa, weights)
         loss_mean = loss.mean()
 
@@ -225,6 +224,8 @@ if __name__ == "__main__":
             done = False
             episode_reward = 0
             while not done:
+                if agent.noisy:
+                    agent.train_net.reset_noise()
                 action = agent.take_action(state) 
                 next_state, reward, done, info = env.step(action)
                 next_state = torch.from_numpy(np.array(next_state)).to(device=device, dtype=torch.float32)
@@ -243,11 +244,11 @@ if __name__ == "__main__":
                     rb.update_prio(loss, batch[5]) # batch = (s, a, r, s', done, indices, weights)
 
             episode_rewards.append(episode_reward)
-            rwd_mean = np.mean(episode_rewards[-100:])
+            rwd_mean = np.mean(episode_rewards[-10:])
             episode_end_time = time.time()
             fps = (frame_cnt - episode_start_frame) / (episode_end_time - episode_start_time)
-            if episode_reward > best_reward:
-                best_reward = episode_reward
+            if rwd_mean > best_reward:
+                best_reward = rwd_mean 
                 torch.save(agent.train_net.state_dict(), args.save_path + agent.model_save_name)
             if rwd_mean >= args.rwd_bound:
                 print(f"Solved in {episode} episodes!")
@@ -259,7 +260,7 @@ if __name__ == "__main__":
 
 
     # plot mean reward
-    plt.plot(np.convolve(episode_rewards, np.ones(100)/100, mode='valid'))
+    plt.plot(np.convolve(episode_rewards, np.ones(10)/10, mode='valid'))
     plt.xlabel('Episode')
     plt.ylabel('Mean Reward (100 episodes)')
     plt.title('DQN on ' + args.env)

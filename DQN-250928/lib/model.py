@@ -28,6 +28,9 @@ class NoisyLinear(nn.Module):
         self.b_mu.data.uniform_(-sqrt_fin, sqrt_fin)
         self.b_sigma.data.fill_(self.std_init * sqrt_fin)
         self.b_eps.normal_()
+    def reset_noise(self):
+        self.w_eps.normal_()
+        self.b_eps.normal_()
     
     def forward(self, x):
         if self.training:
@@ -57,6 +60,11 @@ class DqnFc(nn.Module):
                 nn.ReLU(),
                 nn.Linear(512, feats_out)
             )
+    def reset_noise(self):
+        for m in self.fc_module:
+            if isinstance(m, NoisyLinear):
+                m.reset_noise()
+
     def forward(self, x):
         return self.fc_module(x)
 
@@ -83,6 +91,13 @@ class QNet(nn.Module):
             self.fc_act_advantage = DqnFc(conv_out_size, action_num, self.noisy, self.categorical, self.atoms)
         else:
             self.fc = DqnFc(conv_out_size, action_num, self.noisy, self.categorical, self.atoms)
+
+    def reset_noise(self):
+        if self.dueling:
+            self.fc_state_value.reset_noise()
+            self.fc_act_advantage.reset_noise()
+        else:
+            self.fc.reset_noise()
 
     def _get_conv_out(self, shape):
         o = self.conv(torch.zeros(1, *shape))
