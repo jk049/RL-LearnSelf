@@ -65,8 +65,9 @@ class QNet(nn.Module):
     def __init__(self, input_shape, action_num, args): # input_shape: (B, 4(frame stack), H=84, W=84)
         super().__init__()
         self.act_num = action_num
-        self.dueling = self.dueling
-        self.categorical = self.categorical
+        self.dueling = args.dueling
+        self.noisy = args.noisy
+        self.categorical = args.categorical
         self.atoms = args.atoms
         self.conv = nn.Sequential(
             nn.Conv2d(input_shape[0], 32, kernel_size=8, stride=4), # (84-8)/4 + 1 = 20. -> (B, 32, 20, 20) 
@@ -96,6 +97,7 @@ class QNet(nn.Module):
             q = state_value + act_advantage - act_advantage.mean(dim=1, keepdim=True) 
         else:
             q = self.fc(conv_out)
+
         if self.categorical:
             q = q.view(-1, self.act_num, self.atoms)  # shape: [B, action_num, atoms]
             q = q.softmax(dim=-1)  # shape: [B, action_num, atoms]

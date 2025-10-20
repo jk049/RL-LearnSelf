@@ -49,6 +49,7 @@ class DqnAgent:
         self.epsilon = args.epsilon_start
         self.device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
         self.gamma = args.gamma
+        self.eps_decay_slopes = (args.epsilon_start - args.epsilon_end) / args.epsilon_decay_steps
         self.PER = args.PER
         self.double = args.double
         self.noisy = args.noisy
@@ -57,117 +58,115 @@ class DqnAgent:
         self.vmin = args.vmin
         self.vmax = args.vmax
         self.atom_values = torch.linspace(self.vmin, self.vmax, self.atoms).to(self.device)  # shape: [atoms,]
-        model_last_name = ''
-        if args.double:
-            model_last_name += '_double'
-        if args.dueling:
-            model_last_name += '_dueling'
-        if args.PER:
-            model_last_name += '_PER'
-        if args.noisy:
-            model_last_name += '_noisy'
-        if args.categorical:
-            model_last_name += '_categorical'
-        self.model_save_name = f"{args.env}{model_last_name}.pth"
+        suffixes = [
+            '_double' if args.double else '',
+            '_dueling' if args.dueling else '',
+            '_PER' if args.PER else '',
+            '_noisy' if args.noisy else '',
+            '_categorical' if args.categorical else ''
+        ]
+        self.model_save_name = f"{args.env}{''.join(suffixes)}.pth"
         self.train_net = model.QNet(obs_shape, action_space, args).to(self.device)
         self.target_net = model.QNet(obs_shape, action_space, args).to(self.device)
-        if args.resume:
-            if args.resume_path is None:
-                resume_path = args.save_path + self.model_save_name
-            else:
-                resume_path = args.resume_path
-            self.train_net.load_state_dict(torch.load(resume_path, map_location=self.device))
-            print(f"Resumed model from {resume_path}")
         self.optimizer = torch.optim.Adam(self.train_net.parameters(), lr=args.lr)
-        self.loss = nn.MSELoss()
         print(self.train_net)
+        if args.resume:
+            resume_path = args.resume_path if args.resume_path is not None else args.save_path + self.model_save_name
+            self.train_net.load_state_dict(torch.load(resume_path, map_location=self.device))
+            print(f"[INFO] Resumed model from {resume_path}")
     
     def take_action(self, state):
         if not self.noisy and rng.random() < self.epsilon:
             action = env.action_space.sample()
         else:
             with torch.no_grad():
-                action = self.train_net(state.unsqueeze(0)).argmax().item() # state unsqueeze ->(1,4,84,84)
-        self.epsilon = max(args.epsilon_end, self.epsilon - (args.epsilon_start - args.epsilon_end) / args.epsilon_decay_steps)
+                if self.categorical:
+                    qsa_probs = self.train_net(state.unsqueeze(0))
+                    atoms = self.atom_values.unsqueeze(0).unsqueeze(0)  # shape: [1, 1, atoms]
+                    qsa = (qsa_probs * atoms).sum(-1)  # shape: [1, action_space]
+                    action = qsa.argmax().item()
+                else:
+                    action = self.train_net(state.unsqueeze(0)).argmax().item() # (4,84,84)->(1,4,84,84)
+        self.epsilon = 0 if self.noisy else max(args.epsilon_end, self.epsilon - self.eps_decay_slopes)
         return action
-
+                                           
     def dist_projection(self, dist, rewards, dones):
         delta = (self.vmax - self.vmin) / (self.atoms - 1)
-        batch_size = dist.size(0)
-        proj_dist = torch.zeros_like(dist).to(self.device)  # shape: [B, atoms]
-        discount_rewards = rewards + self.gamma * (1 - dones) * self.atom_values.unsqueeze(0)  # shape: [B, atoms]
+        rewards = rewards.unsqueeze(1).expand(-1, self.atoms)      # [B, atoms]
+        dones = dones.unsqueeze(1).expand(-1, self.atoms)          # [B, atoms]
+        atom_values = self.atom_values.unsqueeze(0)                # [1, atoms]
+        discount_rewards = rewards + self.gamma * (~dones).float() * atom_values  # [B, atoms]
         discount_rewards = discount_rewards.clamp(self.vmin, self.vmax)
-        b = (discount_rewards - self.vmin) / delta  # shape: [B
-        l = b.floor().long()  # shape: [B, atoms]
-        u = b.ceil().long()   # shape: [B, atoms]
-        for i in range(batch_size):
-            for j in range(self.atoms):
-                if l[i][j] == u[i][j]:
-                    proj_dist[i][l[i][j]] += dist[i][j]
-                else:
-                    proj_dist[i][l[i][j]] += dist[i][j] * (u[i][j] - b[i][j])
-                    proj_dist[i][u[i][j]] += dist[i][j] * (b[i][j] - l[i][j])
+        b = (discount_rewards - self.vmin) / delta                 # [B, atoms]
+        l = b.floor().long()                                       # [B, atoms]
+        u = b.ceil().long()                                        # [B, atoms]
+        proj_dist = torch.zeros_like(dist)                         # [B, atoms]
+
+        dist_l = (u -b + (l == b).float()) * dist      # l==b考虑了整点的情况
+        dist_u = (b - l) * dist
+
+        # scatter_add_: self[i, index[i,j]] += src[i,j] dim=1
+        proj_dist.scatter_add_(1, l, dist_l)
+        proj_dist.scatter_add_(1, u, dist_u)
         return proj_dist
-    
+
     def get_train_qsa(self, state_batch, action_batch):
         train_q_values = self.train_net(state_batch) # shape: [B, action_space]
-        if not self.categorical:
-            train_q_sa = train_q_values.gather(dim=1, index=action_batch.unsqueeze(-1)).squeeze(-1) # shape: [B,]
+        if self.categorical:
+            index = action_batch.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, self.atoms) # shape: [B, 1, atoms]
+            train_q_sa = train_q_values.gather(dim=1, index=index).squeeze(1) # shape: [B, atoms]
         else:
-            index = action_batch.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.atoms) # shape: [B, 1, atoms]
-            train_q_sa = train_q_values.gather(dim=1, index=index)
-            train_q_sa = train_q_sa.squeeze(1) # shape: [B, atoms]
+            train_q_sa = train_q_values.gather(dim=1, index=action_batch.unsqueeze(-1)).squeeze(-1) # [B,]
         return train_q_sa
     
     def get_tgt_qsa(self, next_state_batch, reward_batch, done_batch):
         with torch.no_grad():
-            if self.double:
-                if not self.categorical:
-                    next_action = self.train_net(next_state_batch).argmax(1) # shape: [B,]
-                    target_q_next = self.target_net(next_state_batch).gather(dim=1, index=next_action.unsqueeze(-1)).squeeze(-1) # shape: [B,]
+            if self.categorical:
+                if self.double:
+                    next_qsa_probs = self.train_net(next_state_batch) # [B, act_num, atoms]]
                 else:
-                    next_action = self.train_net(next_state_batch).sum(-1).argmax(1) # shape: [B,]
-                    index = next_action.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.atoms) # shape: [B, 1, atoms]
-                    target_q_next = self.target_net(next_state_batch).gather(dim=1, index=index)
-                    target_q_next = target_q_next.squeeze(1) # shape: [B, atoms]
+                    next_qsa_probs = self.target_net(next_state_batch) # [B, act_num, atoms]]
+
+                atoms = self.atom_values.unsqueeze(0).unsqueeze(0)  # shape: [1, 1, atoms]
+                next_action = (next_qsa_probs * atoms).sum(-1).argmax(1)  # [B,]
+                index = next_action.unsqueeze(-1).unsqueeze(-1).expand(-1, 1, self.atoms)  # [B, 1, atoms]
+                target_q_next = self.target_net(next_state_batch).gather(dim=1, index=index).squeeze(1)  # [B, atoms]
+                target_q_sa = self.dist_projection(target_q_next, reward_batch, done_batch)  # [B, atoms]
             else:
-                if not self.categorical:
-                    target_q_next = self.target_net(next_state_batch).max(1)[0] # shape: [B,], max()返回值是(values, indices)
+                if self.double:
+                    next_action = self.train_net(next_state_batch).argmax(1)  # [B,]
+                    target_q_next = self.target_net(next_state_batch).gather(dim=1, index=next_action.unsqueeze(-1)).squeeze(-1)  # [B,]
                 else:
-                    action_index = self.target_net(next_state_batch).sum(-1).argmax(1) # shape: [B,]
-                    index = action_index.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.atoms) # shape: [B, 1, atoms]
-                    target_q_next = self.target_net(next_state_batch).gather(dim=1, index=index)
-                    target_q_next = target_q_next.squeeze(1) # shape: [B, atoms]
-            
-            if not self.categorical:
-                target_q_next *= ~done_batch # if done, Q(s')=0, q_tgt_sa = r
-                target_q_sa = reward_batch + args.gamma * target_q_next # shape: [B,]
-            else:
-                target_q_sa = self.dist_projection(target_q_next, reward_batch, done_batch) # shape: [B, atoms]
+                    target_q_next = self.target_net(next_state_batch).max(1)[0]  # [B,]
+                target_q_next *= ~done_batch  # if done, Q(s')=0
+                target_q_sa = reward_batch + self.gamma * target_q_next  # [B,]
         return target_q_sa
 
-    def loss(self, tgt_qsa, train_qsa):
+    def loss(self, tgt_qsa, train_qsa, weights=None):
         if self.categorical:
             # loss = -sum(tgt_p * log(train_p))
-            log_train_qsa = torch.log(train_qsa.clamp(min=1e-5, max=1-1e-5))  # shape: [B, atoms]
-            loss = -torch.sum(tgt_qsa * log_train_qsa, dim=1)  # shape: [B,]
+            log_train_qsa = torch.log(train_qsa.clamp(1e-5, 1 - 1e-5))  # shape: [B, atoms]
+            loss = -(tgt_qsa * log_train_qsa).sum(dim=1) # shape: [B,]
         else:
-            loss = 0.5 * (tgt_qsa - train_qsa) ** 2  # shape: [B,]
+            loss = 0.5 * (tgt_qsa - train_qsa).pow(2) # shape: [B,]
+        if self.PER:
+            loss *= weights
         return loss
 
     def learn(self, batch):
         states, actions, rewards, next_states, dones = batch[:5]
+        weights = batch[-1] if self.PER else None
         train_q_sa = self.get_train_qsa(states, actions)
         target_q_sa = self.get_tgt_qsa(next_states, rewards, dones)
-        loss = self.loss(train_q_sa, target_q_sa)
+        # loss expects (tgt_qsa, train_qsa)
+        loss = self.loss(target_q_sa, train_q_sa, weights)
         loss_mean = loss.mean()
+
         self.optimizer.zero_grad()
         loss_mean.backward()
         self.optimizer.step()
 
-        weights = batch[-1]
-        loss_prio_weights = loss * weights if self.PER else loss
-        return loss_prio_weights.detach()
+        return loss.detach()
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
