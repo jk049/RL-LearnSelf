@@ -102,7 +102,7 @@ class DqnAgent:
         u = b.ceil().long()                                        # [B, atoms]
         proj_dist = torch.zeros_like(dist)                         # [B, atoms]
 
-        dist_l = (u -b + (l == b).float()) * dist      # l==b考虑了整点的情况
+        dist_l = (u - b + (l == b).float()) * dist      # l==b考虑了整点的情况
         dist_u = (b - l) * dist
 
         # scatter_add_: self[i, index[i,j]] += src[i,j] dim=1
@@ -262,7 +262,7 @@ if __name__ == "__main__":
     # plot mean reward
     plt.plot(np.convolve(episode_rewards, np.ones(10)/10, mode='valid'))
     plt.xlabel('Episode')
-    plt.ylabel('Mean Reward (100 episodes)')
+    plt.ylabel('Mean Reward (10 episodes)')
     plt.title('DQN on ' + args.env)
     plt.show()
 
