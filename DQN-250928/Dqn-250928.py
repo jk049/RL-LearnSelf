@@ -204,7 +204,7 @@ if __name__ == "__main__":
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
-    env = env_wrappers.make_env(args.env)
+    env = env_wrappers.make_env(args.env, train=True)
     if args.PER:
         rb = replay_buffer.PrioRB(args.rb_capacity, env.observation_space.shape, device, 
                                   alpha=args.rb_alpha, beta=args.rb_beta, eps=args.rb_eps)

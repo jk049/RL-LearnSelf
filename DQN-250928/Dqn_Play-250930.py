@@ -19,7 +19,7 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--visible', action='store_true', help='whether to render the environment')
 
     args = parser.parse_args()
-    env = env_wrappers.make_env(args.model.split('_')[0], render_mode="human" if args.visible else None)
+    env = env_wrappers.make_env(args.model.split('_')[0], render_mode="human" if args.visible else None, train=False)
     if args.record:
         env = gym.wrappers.RecordVideo(env, video_folder=args.record+args.model.split('.')[0], episode_trigger=lambda x: True)
     

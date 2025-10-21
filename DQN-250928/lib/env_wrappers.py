@@ -306,11 +306,12 @@ class ClipRewardEnv(gym.RewardWrapper):
             # 或按范围裁剪到 [-1,1]:
             return float(np.clip(reward, self.min_reward, self.max_reward))
 
-def make_env(env_name, render_mode=None):
+def make_env(env_name, render_mode=None, train=True):
     env = gym.make(env_name, render_mode=render_mode)
-    env = NoopResetEnv(env)  # 环境reset时，不进行任何操作
-    env = EpisodicLifeEnv(env)  # 每失去一条命，done=True，但不reset环境
-    env = ClipRewardEnv(env, use_sign=True)  # 将 reward 裁剪为 sign(-1,0,1)
+    if train:
+        env = NoopResetEnv(env)  # 环境reset时，不进行任何操作
+        env = EpisodicLifeEnv(env)  # 每失去一条命，done=True，但不reset环境
+        env = ClipRewardEnv(env, use_sign=True)  # 将 reward 裁剪为 sign(-1,0,1)
     env = MaxAndSkipEnv(env) # 每4帧采样一次，reward为4帧之和，state是最后两帧的最大值
     env = FireResetEnv(env) # 环境reset时，按开火键
     env = ProcessFrame84(env) # 将RGB图像转为灰度图，并裁剪、缩放为84x84
