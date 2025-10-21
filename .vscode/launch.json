@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "name": "Debug Dqn-250928.py --categorical",
+      "program": "${workspaceFolder}/DQN-250928/Dqn-250928.py",
+      "cwd": "${workspaceFolder}/DQN-250928",
+      "console": "integratedTerminal",
+      "args": [
+        "--categorical"
+      ]
+    },
+    {
+      "type": "debugpy",
+      "request": "launch",
+      "name": "Debug Dqn_Play-250930.py --noisy",
+      "program": "${workspaceFolder}/DQN-250928/Dqn-250928.py",
+      "cwd": "${workspaceFolder}/DQN-250928",
+      "console": "integratedTerminal",
+      "args": [
+        "--noisy"
+      ]
+    }
+  ]
+}
