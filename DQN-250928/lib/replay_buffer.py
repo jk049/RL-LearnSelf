@@ -21,12 +21,17 @@ class RB:
 
 
     def add(self, state, action, reward, next_state, done):
-        self.states[self.cur_index] = state
-        self.actions[self.cur_index] = torch.tensor(action, dtype=torch.int64, device=self.actions.device)
-        self.rewards[self.cur_index] = torch.tensor(reward, dtype=torch.float32, device=self.rewards.device)
-        self.next_states[self.cur_index] = next_state
-        self.dones[self.cur_index] = torch.tensor(done, dtype=torch.bool, device=self.dones.device)
-        self.cur_index = (self.cur_index + 1) % self.capacity
+        actions_t = torch.tensor(action, dtype=torch.int64, device=self.actions.device)
+        rewards_t = torch.tensor(reward, dtype=torch.float32, device=self.rewards.device)
+        dones_t = torch.tensor(done, dtype=torch.bool, device=self.dones.device)
+        exp_num = actions_t.shape[0]
+        idx = (self.cur_index + torch.arange(exp_num, device=self.actions.device)) % self.capacity
+        self.states[idx] = state
+        self.actions[idx] = actions_t
+        self.rewards[idx] = rewards_t
+        self.next_states[idx] = next_state
+        self.dones[idx] = dones_t
+        self.cur_index = (self.cur_index + exp_num) % self.capacity
     
     def sample(self, batch_size):
         indices = torch.randint(0, self.capacity, (batch_size,), device=self.states.device)
@@ -67,7 +72,9 @@ class PrioRB(RB):
 
     def add(self, state, action, reward, next_state, done):
         max_prio = max(self.init_prio, self.prioritys.max().item())
-        self.prioritys[self.cur_index] = max_prio
+        exp_num = state.shape[0]
+        idx = (self.cur_index + torch.arange(exp_num, device=self.actions.device)) % self.capacity
+        self.prioritys[idx] = max_prio
         super().add(state, action, reward, next_state, done)
         self.full= True if self.cur_index == 0 else self.full
 
