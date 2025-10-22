@@ -39,6 +39,7 @@ import argparse
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import time
+import gym
 
 from lib import replay_buffer
 from lib import model
@@ -72,7 +73,7 @@ class DqnAgent:
         print(self.train_net)
         if args.resume:
             resume_path = args.resume_path if args.resume_path is not None else args.save_path + self.model_save_name
-            self.train_net.load_state_dict(torch.load(resume_path, map_location=self.device))
+            self.train_net.load_state_dict(torch.load(resume_path, map_location=self.device, weights_only=True))
             print(f"[INFO] Resumed model from {resume_path}")
     
     def take_action(self, state):
@@ -81,12 +82,12 @@ class DqnAgent:
         else:
             with torch.no_grad():
                 if self.categorical:
-                    qsa_probs = self.train_net(state.unsqueeze(0))
+                    qsa_probs = self.train_net(state)
                     atoms = self.atom_values.unsqueeze(0).unsqueeze(0)  # shape: [1, 1, atoms]
-                    qsa = (qsa_probs * atoms).sum(-1)  # shape: [1, action_space]
-                    action = qsa.argmax().item()
+                    qsa = (qsa_probs * atoms).sum(-1)  # shape: [env_num, action_space]
+                    action = qsa.argmax(dim=1).cpu().numpy() # [env_num]
                 else:
-                    action = self.train_net(state.unsqueeze(0)).argmax().item() # (4,84,84)->(1,4,84,84)
+                    action = self.train_net(state).argmax(dim=1).cpu().numpy() 
         self.epsilon = 0 if self.noisy else max(args.epsilon_end, self.epsilon - self.eps_decay_slopes)
         return action
                                            
@@ -166,24 +167,39 @@ class DqnAgent:
         self.optimizer.step()
 
         return loss.detach()
-    
+
+def logger(reward, avg_reward, loss, avg_loss, epsilon, avg_fps, time, episode):
+    pass
+
+def make_env_fn(rank):
+    def _thunk():
+        env = env_wrappers.make_env(args.env, train=True)
+        try:
+            env.seed(args.seed + rank)
+        except Exception:
+            pass
+        return env
+    return _thunk
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', type=int, default=42, help='random seed, default 47')
+    parser.add_argument('--seed', type=int, default=42, help='random seed, default 42')
     parser.add_argument('--cuda', default=True, action='store_true', help='enable cuda')
     parser.add_argument('--env', default='PongNoFrameskip-v4', help='gym environment name, default PongNoFrameskip-v4')
+    parser.add_argument('--env_num', type=int, default=1, help='number of parallel environments, default 1')
     parser.add_argument('--gamma', type=float, default=0.99, help='discount factor for reward, default 0.99')
     parser.add_argument('--batch_size', type=int, default=32, help='number of transitions sampled from replay buffer, default 32')
     parser.add_argument('--rb_capacity', type=int, default=10000, help='capacity of replay buffer, default 10000')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate, default 1e-4')
-    parser.add_argument('--sync_target_frames', type=int, default=1000, help='number of frames between target network sync, default 1000 frames')
+    parser.add_argument('--sync_target_steps', type=int, default=1000, help='number of frames between target network sync, default 1000 steps')
     parser.add_argument('--replay_start_size', type=int, default=10000, help='number of transitions that must be in the replay buffer before starting training, default 10000')
     parser.add_argument('--epsilon_start', type=float, default=1.0, help='starting value of epsilon for epsilon-greedy action selection, default 1.0')
     parser.add_argument('--epsilon_end', type=float, default=0.01, help='ending value of epsilon for epsilon-greedy action selection, default 0.01')
     parser.add_argument('--epsilon_decay_steps', type=int, default=150000, help='number of steps over which to decay epsilon, default 150000')
     parser.add_argument('--rwd_bound', type=float, default=19.0, help='reward boundary for stopping criterion, default 19.0')
     parser.add_argument('--rwd_max', type=float, default=21.0, help='max reward per episode, default 21.0')
-    parser.add_argument('--max_episodes', type=int, default=1000000, help='maximum number of training episodes, default 1000000')
+    parser.add_argument('--max_timestep', type=int, default=1000000, help='maximum number of training timestep, default 1000000')
     parser.add_argument('--save_path', type=str, default='./out/', help='path to save the trained model, default ./out/')
     parser.add_argument('--resume', default=False, action='store_true', help='resume training from saved model')
     parser.add_argument('--resume_path', type=str, default=None, help='path to load the saved model')
@@ -198,66 +214,70 @@ if __name__ == "__main__":
     parser.add_argument('--atoms', type=int, default=51, help='number of atoms for categorical dqn, default 51')
     parser.add_argument('--vmin', type=float, default=-10.0, help='minimum value for categorical dqn, default -10.0')
     parser.add_argument('--vmax', type=float, default=10.0, help='maximum value for categorical dqn, default 10.0')
+    parser.add_argument('--pbar_interval', type=int, default=1000, help='interval steps for progress bar update, default 1000')
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     device = torch.device('cuda' if args.cuda and torch.cuda.is_available() else 'cpu')
-    env = env_wrappers.make_env(args.env, train=True)
+    # sync: 主进程依此调用各环境，适合step快的简单环境；async: 每个环境独立进程，适合step慢的复杂环境
+    env = gym.vector.SyncVectorEnv([make_env_fn(i) for i in range(args.env_num)])
+    obs_shape = env.observation_space.shape[-3:]  # (4, 84, 84)
+    action_space = env.action_space.nvec[0]
     if args.PER:
-        rb = replay_buffer.PrioRB(args.rb_capacity, env.observation_space.shape, device, 
+        rb = replay_buffer.PrioRB(args.rb_capacity, obs_shape, device, 
                                   alpha=args.rb_alpha, beta=args.rb_beta, eps=args.rb_eps)
     else:
-        rb = replay_buffer.RB(args.rb_capacity, env.observation_space.shape, device)
-    agent = DqnAgent(env.observation_space.shape, env.action_space.n, args)
+        rb = replay_buffer.RB(args.rb_capacity, obs_shape, device)
+    agent = DqnAgent(obs_shape, action_space, args)
 
-    frame_cnt = 0
+    state = env.reset() 
+    state = torch.from_numpy(np.array(state)).to(device=device, dtype=torch.float32) # shape:(env_num,4,84,84)
     best_reward = -float('inf')
+    rwd_mean = -float('inf')
     episode_rewards = []
-    with tqdm(total=args.rwd_max, initial=0, desc='Mean Reward ') as pbar:
-        for episode in range(args.max_episodes):
-            episode_start_time = time.time()
-            episode_start_frame = frame_cnt
-            state = env.reset()
-            state = torch.from_numpy(np.array(state)).to(device=device, dtype=torch.float32) # shape:(4,84,84)
-            done = False
-            episode_reward = 0
-            while not done:
-                if agent.noisy:
-                    agent.train_net.reset_noise()
-                action = agent.take_action(state) 
-                next_state, reward, done, info = env.step(action)
-                next_state = torch.from_numpy(np.array(next_state)).to(device=device, dtype=torch.float32)
-                rb.add(state, action, reward, next_state, done)
-                state = next_state
-                episode_reward += reward
-                frame_cnt += 1
-                if frame_cnt < args.replay_start_size:
-                    continue
-                if frame_cnt % args.sync_target_frames == 0:
-                    agent.target_net.load_state_dict(agent.train_net.state_dict())
-                
-                batch = rb.sample(args.batch_size)
-                loss = agent.learn(batch)
-                if args.PER:
-                    rb.update_prio(loss, batch[5]) # batch = (s, a, r, s', done, indices, weights)
+    episode_reward = np.zeros(args.env_num)
+    pbar_interval_frames = args.pbar_interval * args.env_num
+    start_time = time.time()
+    with tqdm(total=args.rwd_max, initial=0, desc='Train Progress') as pbar:
+        for step in range(args.max_timestep):
+            if agent.noisy:
+                agent.train_net.reset_noise()
+            action = agent.take_action(state) 
+            next_state, reward, done, info = env.step(action)
+            next_state = torch.from_numpy(np.array(next_state)).to(device=device, dtype=torch.float32)
+            rb.add(state, action, reward, next_state, done)
+            state = next_state
+            episode_reward += reward
+            done_indices = np.where(done)[0]
+            if done_indices.size > 0:
+                episode_rewards.extend(episode_reward[done_indices].tolist())
+                episode_reward[done_indices] = 0.0
+                rwd_mean = np.mean(episode_rewards[-10:]) 
+                if rwd_mean > best_reward:
+                    best_reward = rwd_mean 
+                    torch.save(agent.train_net.state_dict(), args.save_path + agent.model_save_name)
+                if rwd_mean >= args.rwd_bound:
+                    print(f"Solved in {step} steps!")
+                    break
+            if step % args.pbar_interval == 0:
+                end_time = time.time()
+                fps = pbar_interval_frames / (end_time - start_time)
+                start_time = end_time
+                pbar.set_description(f'Steps{step}')
+                pbar.set_postfix({'Mean Rwd': f'{rwd_mean:.2f}', 'Best Rwd': f'{best_reward:.2f}', 'FPS': f'{fps:.1f}'})
+                pbar.update(round(max(0.0, rwd_mean), 2) - pbar.n) # 显示值保底为0，用整数更新pbar，避免 NaN/负值
 
-            episode_rewards.append(episode_reward)
-            rwd_mean = np.mean(episode_rewards[-10:])
-            episode_end_time = time.time()
-            fps = (frame_cnt - episode_start_frame) / (episode_end_time - episode_start_time)
-            if rwd_mean > best_reward:
-                best_reward = rwd_mean 
-                torch.save(agent.train_net.state_dict(), args.save_path + agent.model_save_name)
-            if rwd_mean >= args.rwd_bound:
-                print(f"Solved in {episode} episodes!")
-                break
-            progress = round(rwd_mean, 2)
-            pbar.set_description(f'Episode {episode}')
-            pbar.set_postfix({'Best Rwd': f'{best_reward:.2f}', 'Eps': f'{agent.epsilon:.2f}', 'FPS': f'{fps:.1f}'})
-            pbar.update(progress - pbar.n)
-
+            if step % args.sync_target_steps == 0:
+                agent.target_net.load_state_dict(agent.train_net.state_dict())
+            if step < args.replay_start_size:
+                continue
+            
+            batch = rb.sample(args.batch_size * args.env_num)
+            loss = agent.learn(batch)
+            if args.PER:
+                rb.update_prio(loss, batch[5]) # batch = (s, a, r, s', done, indices, weights)
 
     # plot mean reward
     plt.plot(np.convolve(episode_rewards, np.ones(10)/10, mode='valid'))
