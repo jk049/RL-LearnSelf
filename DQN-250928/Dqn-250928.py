@@ -73,7 +73,7 @@ class DqnAgent:
         print(self.train_net)
         if args.resume:
             resume_path = args.resume_path if args.resume_path is not None else args.save_path + self.model_save_name
-            self.train_net.load_state_dict(torch.load(resume_path, map_location=self.device))
+            self.train_net.load_state_dict(torch.load(resume_path, map_location=self.device, weights_only=True))
             print(f"[INFO] Resumed model from {resume_path}")
     
     def take_action(self, state):
@@ -167,11 +167,9 @@ class DqnAgent:
         self.optimizer.step()
 
         return loss.detach()
-    
 
 def logger(reward, avg_reward, loss, avg_loss, epsilon, avg_fps, time, episode):
     pass
-
 
 def make_env_fn(rank):
     def _thunk():
@@ -186,7 +184,7 @@ def make_env_fn(rank):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--seed', type=int, default=42, help='random seed, default 47')
+    parser.add_argument('--seed', type=int, default=42, help='random seed, default 42')
     parser.add_argument('--cuda', default=True, action='store_true', help='enable cuda')
     parser.add_argument('--env', default='PongNoFrameskip-v4', help='gym environment name, default PongNoFrameskip-v4')
     parser.add_argument('--env_num', type=int, default=1, help='number of parallel environments, default 1')
@@ -194,7 +192,7 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=32, help='number of transitions sampled from replay buffer, default 32')
     parser.add_argument('--rb_capacity', type=int, default=10000, help='capacity of replay buffer, default 10000')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate, default 1e-4')
-    parser.add_argument('--sync_target_steps', type=int, default=1000, help='number of frames between target network sync, default 4000 steps')
+    parser.add_argument('--sync_target_steps', type=int, default=1000, help='number of frames between target network sync, default 1000 steps')
     parser.add_argument('--replay_start_size', type=int, default=10000, help='number of transitions that must be in the replay buffer before starting training, default 10000')
     parser.add_argument('--epsilon_start', type=float, default=1.0, help='starting value of epsilon for epsilon-greedy action selection, default 1.0')
     parser.add_argument('--epsilon_end', type=float, default=0.01, help='ending value of epsilon for epsilon-greedy action selection, default 0.01')
@@ -216,7 +214,7 @@ if __name__ == "__main__":
     parser.add_argument('--atoms', type=int, default=51, help='number of atoms for categorical dqn, default 51')
     parser.add_argument('--vmin', type=float, default=-10.0, help='minimum value for categorical dqn, default -10.0')
     parser.add_argument('--vmax', type=float, default=10.0, help='maximum value for categorical dqn, default 10.0')
-    parser.add_argument('--pbar_interval', type=int, default=100, help='interval steps for progress bar update, default 1000')
+    parser.add_argument('--pbar_interval', type=int, default=1000, help='interval steps for progress bar update, default 1000')
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -234,7 +232,7 @@ if __name__ == "__main__":
         rb = replay_buffer.RB(args.rb_capacity, obs_shape, device)
     agent = DqnAgent(obs_shape, action_space, args)
 
-    state = env.reset() # todo! seed
+    state = env.reset() 
     state = torch.from_numpy(np.array(state)).to(device=device, dtype=torch.float32) # shape:(env_num,4,84,84)
     best_reward = -float('inf')
     rwd_mean = -float('inf')
@@ -269,7 +267,7 @@ if __name__ == "__main__":
                 start_time = end_time
                 pbar.set_description(f'Steps{step}')
                 pbar.set_postfix({'Mean Rwd': f'{rwd_mean:.2f}', 'Best Rwd': f'{best_reward:.2f}', 'FPS': f'{fps:.1f}'})
-                pbar.update(max(0, int(round(max(0.0, rwd_mean))) - pbar.n)) # 显示值保底为0，用整数更新pbar，避免 NaN/负值
+                pbar.update(round(max(0.0, rwd_mean), 2) - pbar.n) # 显示值保底为0，用整数更新pbar，避免 NaN/负值
 
             if step % args.sync_target_steps == 0:
                 agent.target_net.load_state_dict(agent.train_net.state_dict())
