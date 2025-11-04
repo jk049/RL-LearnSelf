@@ -100,8 +100,19 @@ class ImageToPyTorch(gym.ObservationWrapper):
 
 
 class ScaledFloatFrame(gym.ObservationWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        # 保持与输入相同的形状，但显式声明为 float32 且范围 [0.0, 1.0]
+        old_space = self.observation_space
+        self.observation_space = gym.spaces.Box(
+            low=0.0,
+            high=1.0,
+            shape=old_space.shape,
+            dtype=np.float32,
+        )
+
     def observation(self, obs):
-        return np.array(obs).astype(np.float32) / 255.0
+        return np.asarray(obs, dtype=np.float32) / 255.0
 
 
 class BufferWrapper(gym.ObservationWrapper):
@@ -306,15 +317,38 @@ class ClipRewardEnv(gym.RewardWrapper):
             # 或按范围裁剪到 [-1,1]:
             return float(np.clip(reward, self.min_reward, self.max_reward))
 
-def make_env(env_name, render_mode=None, train=True):
+def make_env(env_name, render_mode=None, train=True, orin_pic=False):
     env = gym.make(env_name, render_mode=render_mode)
+    
     if train:
         env = NoopResetEnv(env)  # 环境reset时，不进行任何操作
         env = EpisodicLifeEnv(env)  # 每失去一条命，done=True，但不reset环境
         env = ClipRewardEnv(env, use_sign=True)  # 将 reward 裁剪为 sign(-1,0,1)
-    env = MaxAndSkipEnv(env) # 每4帧采样一次，reward为4帧之和，state是最后两帧的最大值
     env = FireResetEnv(env) # 环境reset时，按开火键
     env = ProcessFrame84(env) # 将RGB图像转为灰度图，并裁剪、缩放为84x84
-    env = ImageToPyTorch(env) # 将图像shape从(H,W,C)转为(C,H,W)，并且归一化到0-1之间
-    env = BufferWrapper(env, 4) # 堆叠4帧图像作为一个state
-    return ScaledFloatFrame(env) # 将图像归一化到0-1之间
+    env = MaxAndSkipEnv(env) # 每4帧采样一次，reward为4帧之和，state是最后2帧的最大值
+
+    if not orin_pic:
+        env = ScaledFloatFrame(env) # 将图像归一化到0-1之间
+        env = ImageToPyTorch(env) # 将图像shape从(H,W,C)转为(C,H,W)
+        env = BufferWrapper(env, 4) # 堆叠4帧图像作为一个state
+
+    return env 
+
+class CuleWrappers(gym.Wrapper):
+
+    def __init__(self, env):
+        pass
+
+    class ChnnelChange(gym.Wrapper):
+        pass
+
+    class ScaleObs(gym.Wrapper):
+        pass
+    
+    class FrameStack(gym.Wrapper):
+        pass
+
+
+    
+        

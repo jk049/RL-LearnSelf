@@ -70,7 +70,7 @@ class DqnFc(nn.Module):
 
 
 class QNet(nn.Module):
-    def __init__(self, obs_shape, action_num, args): # input_shape: (*, 4(frame stack), H=84, W=84)
+    def __init__(self, img_size, action_num, args): # input_shape: (*, 4(frame stack), H=84, W=84)
         super().__init__()
         self.act_num = action_num
         self.dueling = args.dueling
@@ -78,14 +78,14 @@ class QNet(nn.Module):
         self.categorical = args.categorical
         self.atoms = args.atoms
         self.conv = nn.Sequential(
-            nn.Conv2d(obs_shape[0], 32, kernel_size=8, stride=4), # (84-8)/4 + 1 = 20. -> (B, 32, 20, 20) 
+            nn.Conv2d(args.framestack, 32, kernel_size=8, stride=4), # (84-8)/4 + 1 = 20. -> (B, 32, 20, 20) 
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2), # (20-4)/2 + 1 = 9. -> (B, 64, 9, 9)
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=3, stride=1), # (9-3)/1 + 1 = 7. -> (B, 64, 7, 7)
             nn.ReLU()
         )
-        conv_out_size = self._get_conv_out(obs_shape)  # 64*7*7 = 3136
+        conv_out_size = self._get_conv_out(args.framestack, img_size)  # 64*7*7 = 3136
         if self.dueling:
             self.fc_state_value = DqnFc(conv_out_size, 1, self.noisy, self.categorical, self.atoms)
             self.fc_act_advantage = DqnFc(conv_out_size, action_num, self.noisy, self.categorical, self.atoms)
@@ -99,8 +99,8 @@ class QNet(nn.Module):
         else:
             self.fc.reset_noise()
 
-    def _get_conv_out(self, shape):
-        o = self.conv(torch.zeros(1, *shape))
+    def _get_conv_out(self, framestack, img_size):
+        o = self.conv(torch.zeros(1, framestack, *img_size))
         return int(np.prod(o.size()))
 
     def forward(self, x):
