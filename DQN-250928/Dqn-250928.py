@@ -209,7 +209,7 @@ def make_env(args):
         # cule example创建train env时候frameskip是1，test env的frameskip是4. why?
         # obs: [env_num, h, w, c]
         env = Env(args.env, args.env_num, device = 'cuda:0', color_mode='gray', 
-                  rescale=True, episodic_life=True, frameskip=1, repeat_prob=0.0)
+                  rescale=True, episodic_life=True, frameskip=4, repeat_prob=0.0)
         env.train() # 设置为训练模式，reset时执行50//frameskip次随机动作
         action_space = env.action_space.n
         seeds = [args.seed + i for i in range(args.env_num)]
@@ -312,10 +312,9 @@ if __name__ == "__main__":
             s0 = state.squeeze(-1).float()
             rb.reset(s0)
 
-    if args.cule:
-        default_stream = torch.cuda.default_stream() # default stream上执行env.step等操作
-        train_stream = torch.cuda.Stream()  # agent学习在train_stream上执行
-        learn_done = torch.cuda.Event() # agent完成当前step的learn的信号
+    default_stream = torch.cuda.default_stream() # default stream上执行env.step等操作
+    train_stream = torch.cuda.Stream()  # agent学习在train_stream上执行
+    learn_done = torch.cuda.Event() # agent完成当前step的learn的信号
 
     best_reward = -float('inf')
     rwd_mean = -float('inf')
@@ -328,7 +327,7 @@ if __name__ == "__main__":
         for step in range(args.max_timestep):
 
             with torch.cuda.stream(train_stream):
-                if step >= args.replay_start_size:
+                if step >= args.replay_start_size and (step % 4 == 0):
                     for _ in range(args.lr_times_per_step):
                         agent.train_net.reset_noise()
                         batch = rb.sample(args.batch_size)
