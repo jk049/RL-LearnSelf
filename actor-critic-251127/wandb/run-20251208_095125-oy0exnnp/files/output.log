@@ -1,0 +1,14 @@
+/home/jk049/anaconda3/envs/cleanrl/lib/python3.8/site-packages/gymnasium/envs/registration.py:513: DeprecationWarning: [33mWARN: The environment CartPole-v0 is out of date. You should consider upgrading to version `v1`.[0m
+  logger.deprecation(
+/home/jk049/anaconda3/envs/cleanrl/lib/python3.8/site-packages/gymnasium/core.py:311: UserWarning: [33mWARN: env.seed to get variables from other wrappers is deprecated and will be removed in v1.0, to get this variable you can do `env.unwrapped.seed` for environment variables or `env.get_wrapper_attr('seed')` that will search the reminding wrappers.[0m
+  logger.warn(
+Traceback (most recent call last):
+  File "actor-critic.py", line 125, in <module>
+    env.seed(args.seed)
+  File "/home/jk049/anaconda3/envs/cleanrl/lib/python3.8/site-packages/gymnasium/core.py", line 315, in __getattr__
+    return getattr(self.env, name)
+  File "/home/jk049/anaconda3/envs/cleanrl/lib/python3.8/site-packages/gymnasium/core.py", line 315, in __getattr__
+    return getattr(self.env, name)
+  File "/home/jk049/anaconda3/envs/cleanrl/lib/python3.8/site-packages/gymnasium/core.py", line 315, in __getattr__
+    return getattr(self.env, name)
+AttributeError: 'CartPoleEnv' object has no attribute 'seed'
