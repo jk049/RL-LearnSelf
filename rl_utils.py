@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import collections
 import random
+import wandb
 
 class ReplayBuffer:
     def __init__(self, capacity):
@@ -53,11 +54,17 @@ def train_on_policy_agent(env, agent, num_episodes):
                 pbar.update(1)
     return return_list
 
-def train_off_policy_agent(env, agent, num_episodes, replay_buffer, minimal_size, batch_size):
+def train_off_policy_agent(env, agent, replay_buffer, args):
     return_list = []
+    wandb.init(project = args.wandb_project,
+               name = args.exp_name,
+               config = vars(args),
+               save_code = args.save_code,
+               monitor_gym = args.capture_video)
+
     for i in range(10):
-        with tqdm(total=int(num_episodes/10), desc='Iteration %d' % i) as pbar:
-            for i_episode in range(int(num_episodes/10)):
+        with tqdm(total=int(args.num_episodes/10), desc='Iteration %d' % i) as pbar:
+            for i_episode in range(int(args.num_episodes/10)):
                 episode_return = 0
                 state = env.reset()
                 done = False
@@ -67,13 +74,14 @@ def train_off_policy_agent(env, agent, num_episodes, replay_buffer, minimal_size
                     replay_buffer.add(state, action, reward, next_state, done)
                     state = next_state
                     episode_return += reward
-                    if replay_buffer.size() > minimal_size:
-                        b_s, b_a, b_r, b_ns, b_d = replay_buffer.sample(batch_size)
+                    if replay_buffer.size() > args.minimal_size:
+                        b_s, b_a, b_r, b_ns, b_d = replay_buffer.sample(args.batch_size)
                         transition_dict = {'states': b_s, 'actions': b_a, 'next_states': b_ns, 'rewards': b_r, 'dones': b_d}
                         agent.update(transition_dict)
                 return_list.append(episode_return)
+                wandb.log({'episode_return': episode_return}, step = len(return_list))
                 if (i_episode+1) % 10 == 0:
-                    pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
+                    pbar.set_postfix({'episode': '%d' % (args.num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
                 pbar.update(1)
     return return_list
 
