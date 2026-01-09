@@ -28,8 +28,13 @@ def moving_average(a, window_size):
     end = (np.cumsum(a[:-window_size:-1])[::2] / r)[::-1]
     return np.concatenate((begin, middle, end))
 
-def train_on_policy_agent(env, agent, num_episodes):
+def train_on_policy_agent(env, agent, num_episodes, args):
     return_list = []
+    wandb.init(project = args.wandb_project,
+               name = f"{args.exp_name}-{args.exp_para}",
+               config = vars(args),
+               save_code = True)
+
     for i in range(10):
         with tqdm(total=int(num_episodes/10), desc='Iteration %d' % i) as pbar:
             for i_episode in range(int(num_episodes/10)):
@@ -48,6 +53,7 @@ def train_on_policy_agent(env, agent, num_episodes):
                     state = next_state
                     episode_return += reward
                 return_list.append(episode_return)
+                wandb.log({'episode_return': episode_return}, step = len(return_list))
                 agent.update(transition_dict)
                 if (i_episode+1) % 10 == 0:
                     pbar.set_postfix({'episode': '%d' % (num_episodes/10 * i + i_episode+1), 'return': '%.3f' % np.mean(return_list[-10:])})
